@@ -1,0 +1,13 @@
+// Responsibility: example fixture data for users
+[
+  {
+    "id": 1,
+    "name": "Alice Example",
+    "email": "alice@example.test"
+  },
+  {
+    "id": 2,
+    "name": "Bob Example",
+    "email": "bob@example.test"
+  }
+]

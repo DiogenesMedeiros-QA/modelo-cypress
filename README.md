@@ -1,0 +1,231 @@
+# Modelo Cypress - Arquitetura de Testes API
+
+Breve: arquitetura pronta para testes de API com Cypress + Node (DB tasks, BaseService, relatórios Allure/Mochawesome).
+
+Comandos úteis:
+
+- Instalar dependências:
+```
+npm ci
+```
+
+- Rodar em dev (GUI):
+```
+npm run cypress:open
+```
+
+- Rodar em CI / headless (Mochawesome):
+```
+npm run test:mochawesome
+```
+
+- Rodar com Allure (gera resultados):
+```
+npm run test:allure
+npm run allure:serve
+```
+
+Como injetar segredos em CI:
+
+- Defina `DB_URL`, `DB_CLIENT` (pg|mysql), `CYPRESS_baseUrl` e outros via variáveis de ambiente do runner/CI.
+
+Estrutura resumida (paths exatos):
+
+- cypress/services/ — Service Objects (ex.: usersService.js)
+- cypress/fixtures/ — massa estática (JSON)
+- cypress/support/ — comandos e `baseService.js`
+- cypress/e2e/tests/ — testes organizados por domínio
+- cypress.config.js — tasks para DB e configuração do runner
+- .github/workflows/pipeline.yaml — CI
+- reports/ — output dos relatórios
+
+Guia passo-a-passo (para um QA conseguir rodar e adaptar o projeto)
+
+1) Preparar o ambiente local
+
+- Requisitos mínimos:
+	- Node.js LTS (16/18/20) instalado
+	- npm
+	- Para testes que usam Postgres: `psql` (opcional) ou um container Postgres
+
+- Copie o arquivo de exemplo de variáveis de ambiente:
+
+```powershell
+Copy-Item .env.example .env
+# editar .env conforme necessário (DB_URL, CYPRESS_baseUrl, CYPRESS_TOKEN)
+```
+
+Observação: o projeto lê `CYPRESS_baseUrl` e `DB_URL` do ambiente. Em CI use secrets de repositório.
+
+2) Instalar dependências
+
+```powershell
+npm install
+```
+
+Nota: em ambientes CI prefira `npm ci` quando `package-lock.json` estiver presente e atualizado.
+
+3) Preparar o banco de dados (opcional local)
+
+- Opção A — rodar o SQL de seed manualmente (Postgres):
+
+```powershell
+# se psql estiver instalado, por exemplo (ajuste host/port/credentials)
+psql "postgres://test:test@localhost:5432/testdb" -f database/seed.sql
+```
+
+- Opção B — usar `cy.task` dentro dos hooks de teste (recomendado para idempotência):
+
+No seu spec `before()` ou `beforeEach()` chame:
+
+```js
+cy.task('seedDatabase', { sqlPath: 'database/seed.sql' });
+```
+
+Isto garante que cada execução do teste pode semear dados conforme necessário.
+
+4) Executar testes (modo GUI)
+
+```powershell
+npm run cypress:open
+```
+
+Use a interface do Cypress para rodar suites ou specs específicas.
+
+5) Executar testes (modo headless + gerar Mochawesome)
+
+```powershell
+npm run test:mochawesome
+```
+
+Relatórios HTML/JSON serão salvos em `reports/mochawesome`.
+
+6) Executar com Allure (opcional)
+
+Se quiser usar Allure, instale o plugin compatível e atualize `package.json` (ou re-adicione `@shelex/cypress-allure-plugin`):
+
+```powershell
+npm i -D @shelex/cypress-allure-plugin allure-commandline
+npm run test:allure
+npm run allure:serve
+```
+
+Nota: Allure pode requerer instalação extra no runner (ou usar imagem Docker com Allure já disponível).
+
+7) Rodando testes apontando para outro ambiente (temporário no PowerShell)
+
+```powershell
+$env:CYPRESS_baseUrl='https://staging.api.company.com'
+$env:DB_URL='postgres://user:pass@host:5432/db'
+npm run test:mochawesome
+```
+
+8) Como adaptar o template para seu projeto (passos práticos)
+
+- Endpoints: abra `cypress/services/*Service.js` e ajuste os caminhos base (`USERS_PATH`) para os seus recursos.
+- Headers & Auth: se seu projeto tem outro header de auth, edite `cypress/support/baseService.js` (método `_buildHeaders`) ou use `cy.setAuthToken(token)` nos hooks.
+- Schemas: para validação de contrato, instale `chai-json-schema` ou `ajv` e importe os schemas em `cypress/e2e/tests/*`.
+- DB: modifique `database/seed.sql` para seu schema; use `cy.task('queryDatabase', { query, values })` para checar persistência.
+- Test isolation: sempre use `seedDatabase`/`clearDatabase` via `cy.task` em `beforeEach`/`afterEach` para manter idempotência.
+
+Exemplo de hook que semeia antes da suíte global (cypress/e2e/tests/setup.spec.js):
+
+```js
+before(() => {
+	cy.task('seedDatabase', { sqlPath: 'database/seed.sql' });
+});
+
+after(() => {
+	// opcional teardown
+	// cy.task('queryDatabase', { query: 'TRUNCATE TABLE users RESTART IDENTITY CASCADE;' });
+});
+```
+
+9) CI (GitHub Actions) — notas práticas
+
+- O workflow `.github/workflows/pipeline.yaml` já inclui um job básico com Postgres service e upload de artefatos.
+- Garanta que as variáveis `DB_URL`, `DB_CLIENT` e `CYPRESS_baseUrl` estejam configuradas nos `env` do job (ou Secrets).
+- Se usar Allure, permita instalação do `allure-commandline` no runner ou gere e armazene `allure-results` como artefato.
+
+10) Troubleshooting comum
+
+- Erro `npm ci` relacionado a lockfile: rode `npm install` localmente para gerar `package-lock.json`, em CI use `npm ci` com lockfile atualizado.
+- Erro de conexão DB: verifique `DB_URL` e se o serviço do DB está acessível do runner (no Docker use host.docker.internal ou configure network no container).
+- Versões de Cypress: este template alvo Cypress v10+; ajuste `cypress.config.js` se migrar para outra major.
+
+11) Dicas para validação de contrato (opcional)
+
+- Instalar libs: `npm i -D chai-json-schema ajv`
+- Em um spec:
+
+```js
+const chai = require('chai');
+const chaiJsonSchema = require('chai-json-schema');
+chai.use(chaiJsonSchema);
+
+// usar expect(res.body).to.be.jsonSchema(schema)
+```
+
+12) Exemplo rápido de como rodar uma única spec
+
+```powershell
+npx cypress run --spec "cypress/e2e/tests/users/persistence.spec.js"
+```
+
+13) Como re-adicionar Allure plugin (se desejar)
+
+- Re-adicione a dependência com versão compatível, atualize `cypress.config.js` para requerer o writer e configure `allure-commandline` no runner. Se tiver problemas com versões, verifique a página do plugin para a versão compatível com sua versão do Cypress.
+
+14) Checklist rápido antes de abrir um PR de testes
+
+- [ ] Testes rodam localmente em `cypress:open` e `test:mochawesome`.
+- [ ] Seed/teardown garantem idempotência.
+- [ ] Serviços e paths foram ajustados para o ambiente alvo.
+- [ ] Variáveis sensíveis não estão cometidas no repo (`.env` no .gitignore).
+
+Se quiser, eu posso:
+- A: adicionar o hook global `before()` que chama `cy.task('seedDatabase', ...)` automaticamente (recomendado),
+- B: adicionar validação JSON Schema com `chai-json-schema` e exemplo de schema, ou
+- C: criar um `docker-compose.yml` pronto com API stub + Postgres para testes locais.
+
+
+Como adaptar este template para outro projeto (passos rápidos):
+
+1. Atualize `CYPRESS_baseUrl` no arquivo `.env` ou nas variáveis do CI para apontar para sua API.
+2. Ajuste os paths nos Service Objects em `cypress/services/*.js` para os endpoints reais da sua API.
+3. Se necessário instale bibliotecas de schema validation (ex.: `ajv`, `chai-json-schema`) e adicione asserções de contrato nos testes.
+4. Configure `DB_URL` e `DB_CLIENT` no `.env`/CI; modifique `database/seed.sql` conforme o schema do seu projeto.
+5. Use `cy.task('seedDatabase', { sqlPath: 'database/seed.sql' })` em hooks `before`/`beforeEach` para garantir idempotência.
+6. Para autenticação, ajuste `cypress/support/baseService.js` ou utilize `cy.setAuthToken(token)` no `before` do teste.
+
+Exemplo de execução local (passo-a-passo):
+
+```
+cp .env.example .env
+# editar .env conforme necessário (DB_URL, CYPRESS_baseUrl)
+npm ci
+# (opcional) seed local DB
+# psql $DB_URL -f database/seed.sql
+npm run cypress:open   # executar manualmente ou
+npm run test:mochawesome # executar headless e gerar relatórios
+```
+
+SQL de exemplo (veja `database/seed.sql`):
+
+``sql
+-- cria tabela users e insere dados de exemplo
+CREATE TABLE IF NOT EXISTS users (
+	id SERIAL PRIMARY KEY,
+	name VARCHAR(255) NOT NULL,
+	email VARCHAR(255) UNIQUE NOT NULL,
+	created_at TIMESTAMP DEFAULT now()
+);
+
+INSERT INTO users (name, email) VALUES ('Alice Example','alice@example.test') ON CONFLICT DO NOTHING;
+```
+
+Considerações finais:
+
+- Mantenha `Service Objects` livres de asserts (apenas retornam dados); deixe asserções nos testes.
+- Prefira `cy.task` para operações pesadas/DB para manter testes rápidos e isolados.
+- Para contratos mais rígidos, adicione validação JSON Schema nas spec files.

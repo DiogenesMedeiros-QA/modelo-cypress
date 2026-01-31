@@ -1,0 +1,17 @@
+# Node
+node_modules/
+package-lock.json
+
+# Env
+.env
+.env.local
+
+# Cypress artifacts
+cypress/videos/
+cypress/screenshots/
+reports/
+allure-results/
+allure-report/
+
+# OS
+.DS_Store

@@ -1,0 +1,68 @@
+# GitHub Actions pipeline to run Cypress tests in container, cache node_modules and publish reports
+name: Cypress API Tests CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: [16.x]
+    services:
+      postgres:
+        image: postgres:14
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: testdb
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache node modules
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-node-${{ matrix.node-version }}-cypress
+          restore-keys: |
+            ${{ runner.os }}-node-${{ matrix.node-version }}-
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Wait for Postgres
+        run: |
+          for i in {1..30}; do pg_isready -h 127.0.0.1 && break || sleep 1; done
+
+      - name: Run Cypress tests
+        env:
+          DB_URL: postgres://test:test@127.0.0.1:5432/testdb
+          DB_CLIENT: pg
+          CYPRESS_baseUrl: http://host.docker.internal:3000
+        run: |
+          npx cypress run --reporter mochawesome --reporter-options reportDir=reports/mochawesome,overwrite=false,html=true,json=true
+
+      - name: Upload report artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: cypress-reports
+          path: |
+            reports/**
+            allure-results/**
+
+# Optional Azure DevOps note:
+# In Azure pipelines, mirror steps: use NodeTool@0, cache npm, use Docker containers or containerJob with a Postgres service, run `npm ci` and `npx cypress run`, then publishPipelineArtifact for reports.
