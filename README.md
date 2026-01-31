@@ -229,3 +229,5 @@ Considerações finais:
 - Mantenha `Service Objects` livres de asserts (apenas retornam dados); deixe asserções nos testes.
 - Prefira `cy.task` para operações pesadas/DB para manter testes rápidos e isolados.
 - Para contratos mais rígidos, adicione validação JSON Schema nas spec files.
+#   m o d e l o - c y p r e s s  
+ 
