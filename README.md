@@ -1,21 +1,45 @@
 # Modelo Cypress — Arquitetura de Testes API
 
-Arquitetura pronta para testes de API com Cypress (v10+) e Node.js. Inclui:
+Arquitetura pronta para testes automatizados de APIs com Cypress (v10+) e Node.js. Fornece:
 
-- `BaseService` para encapsular `cy.request()` (auth/headers/logs/erros).
-- `cy.task` para operações com banco (Postgres/MySQL) via `pg`/`mysql2`.
-- Exemplos de Service Objects, fixtures e testes (smoke, contract, persistence).
-- Integração com Mochawesome e suporte para Allure.
+- Camada HTTP centralizada (`BaseService`) que encapsula `cy.request()` com headers, Bearer token, logs e tratamento de erros.
+- `cy.task` para operações de banco (Postgres/MySQL) usando `pg` / `mysql2`.
+- Exemplos de Service Objects, fixtures e testes (smoke, contrato, persistência).
+- Integração com Mochawesome e opção para Allure.
 
 ---
 
-## Quickstart (local)
+## Índice
 
-1. Copie variáveis de exemplo:
+- [Pré-requisitos](#pré-requisitos)
+- [Instalação](#instalação)
+- [Configuração de ambiente (.env)](#configuração-de-ambiente-env)
+- [Seed / DB tasks (`cy.task`)](#seed--db-tasks-cytask)
+- [Execução dos testes](#execução-dos-testes)
+- [Relatórios — Mochawesome (recomendado) e Allure (opcional)](#relatórios---mochawesome-recomendado-e-allure-opcional)
+- [BaseService — uso e como estender](#baseservice---uso-e-como-estender)
+- [Estrutura do repositório](#estrutura-do-repositório)
+- [CI / GitHub Actions (exemplo)](#ci--github-actions-exemplo)
+- [Checklist antes de abrir PR](#checklist-antes-de-abrir-pr)
+
+---
+
+## Pré-requisitos
+
+- Node.js LTS (16/18/20)
+- npm
+- Se for validar persistência em DB: Postgres ou MySQL disponíveis (local, container ou serviço CI)
+- (Opcional) `psql` para executar `database/seed.sql` localmente
+
+---
+
+## Instalação
+
+1. Copie o arquivo de variáveis de ambiente:
 
 ```powershell
 Copy-Item .env.example .env
-# edite .env conforme necessário (DB_URL, CYPRESS_baseUrl, CYPRESS_TOKEN)
+# Edite .env conforme necessário (DB_URL, CYPRESS_baseUrl, CYPRESS_TOKEN)
 ```
 
 2. Instale dependências:
@@ -24,92 +48,167 @@ Copy-Item .env.example .env
 npm install
 ```
 
-> Em CI prefira `npm ci` quando o `package-lock.json` estiver presente.
+> Em CI prefira `npm ci` quando `package-lock.json` estiver presente.
 
-3. (Opcional) Seed no banco local:
+---
+
+## Configuração de ambiente (.env)
+
+Exemplo mínimo em `.env`:
+
+```text
+CYPRESS_baseUrl=http://localhost:3000
+DB_URL=postgres://test:test@localhost:5432/testdb
+DB_CLIENT=pg
+CYPRESS_TOKEN=
+```
+
+- `CYPRESS_baseUrl`: url base da API sob teste.
+- `DB_URL`: connection string do banco (Postgres/MySQL).
+- `DB_CLIENT`: `pg` ou `mysql`.
+- `CYPRESS_TOKEN`: token opcional para autenticação Bearer.
+
+No CI, defina essas variáveis como secrets no repositório (Actions → Secrets).
+
+---
+
+## Seed / DB tasks (`cy.task`)
+
+Este template expõe tasks via `setupNodeEvents` em `cypress.config.js`:
+
+- `cy.task('queryDatabase', { query, values })` — executa query e retorna linhas.
+- `cy.task('seedDatabase', { sqlPath })` — carrega e executa um arquivo SQL (ex.: `database/seed.sql`).
+
+Opções para semear o DB:
+
+- Manual (local):
 
 ```powershell
-# Usando psql (Postgres)
 psql "postgres://test:test@localhost:5432/testdb" -f database/seed.sql
 ```
 
-4. Rodar Cypress (GUI):
+- Via Cypress hook (recomendado, idempotência):
+
+```js
+// cypress/e2e/tests/setup.spec.js
+before(() => {
+	cy.task('seedDatabase', { sqlPath: 'database/seed.sql' });
+});
+
+after(() => {
+	// opcional teardown
+	// cy.task('queryDatabase', { query: 'TRUNCATE TABLE users RESTART IDENTITY CASCADE;' });
+});
+```
+
+---
+
+## Execução dos testes
+
+- Abrir GUI (para desenvolvimento interativo):
 
 ```powershell
 npm run cypress:open
 ```
 
-5. Rodar headless e gerar Mochawesome:
+- Rodar headless (CI/local) com Mochawesome:
 
 ```powershell
 npm run test:mochawesome
+# saída em: reports/mochawesome (html + json)
 ```
 
-6. Rodar com Allure (opcional):
+- Executar uma spec específica:
 
 ```powershell
-npm i -D @shelex/cypress-allure-plugin allure-commandline
-npm run test:allure
-npm run allure:serve
+npx cypress run --spec "cypress/e2e/tests/users/persistence.spec.js"
 ```
 
 ---
 
-## Estrutura do repositório (paths exatos)
+## Relatórios — Mochawesome (recomendado) e Allure (opcional)
+
+Mochawesome:
+- Dependências: `mochawesome`, `cypress-multi-reporters` (configuradas no template).
+- Script de exemplo:
+
+```json
+"test:mochawesome": "cypress run --reporter mochawesome --reporter-options reportDir=reports/mochawesome,overwrite=false,html=true,json=true"
+```
+
+- Resultado: arquivos HTML/JSON em `reports/mochawesome`.
+
+Allure (opcional):
+- Plugin: `@shelex/cypress-allure-plugin` e `allure-commandline`.
+- Uso: plugin escreve `allure-results`; gerar relatório com `allure generate` e abrir com `allure open`.
+- Trade-off: Allure fornece relatórios ricos, porém exige instalação adicional no runner.
+
+---
+
+## BaseService — uso e como estender
+
+Responsabilidade do `BaseService`:
+- Centralizar chamadas HTTP (`cy.request`) com headers (Content-Type, Authorization Bearer), `failOnStatusCode: false`, logs (`cy.log`) e retorno padrão `{ status, body, headers, duration }`.
+- Suportar hook opcional de refresh token.
+
+Como estender:
+- Crie Service Objects em `cypress/services/<domain>Service.js` que importem `baseService` e exponham métodos por recurso.
+
+Exemplo (trecho):
+
+```js
+const { baseService } = require('../support/baseService');
+const USERS_PATH = '/api/users';
+
+module.exports = {
+	list(params) { /* baseService.get(`${USERS_PATH}${qs}`) */ },
+	get(id) { /* ... */ },
+	create(payload) { /* ... */ }
+};
+```
+
+Boas práticas:
+- Service Objects não fazem asserts; retornam dados para os specs.
+
+---
+
+## Estrutura do repositório
 
 - `cypress/services/` — Service Objects (ex.: `usersService.js`)
-- `cypress/fixtures/` — massa estática (JSON)
-- `cypress/support/` — comandos e `baseService.js`
-- `cypress/e2e/tests/` — testes organizados por domínio
-- `cypress.config.js` — tasks para DB e configuração do runner
-- `.github/workflows/pipeline.yaml` — CI
-- `database/seed.sql` — exemplo de seed
+- `cypress/fixtures/` — fixtures JSON
+- `cypress/support/` — `baseService.js`, `commands.js`, `e2e.js`
+- `cypress/e2e/tests/` — specs organizadas por domínio
+- `cypress.config.js` — tasks (`queryDatabase`, `seedDatabase`) e reporters
+- `database/seed.sql` — seed de exemplo
+- `.github/workflows/pipeline.yaml` — workflow CI
 - `reports/` — saída dos relatórios
 
 ---
 
-## Como adaptar este template para seu projeto
+## CI / GitHub Actions (exemplo)
 
-1. Atualize `CYPRESS_baseUrl` no `.env` ou nas variáveis do CI.
-2. Ajuste os Service Objects em `cypress/services/*.js` para os endpoints reais.
-3. Se necessário, adicione validação de schema (`ajv` ou `chai-json-schema`).
-4. Ajuste `database/seed.sql` para seu schema e use `cy.task('seedDatabase', { sqlPath })` para seed idempotente.
-5. Para autenticação, use `cy.setAuthToken(token)` nos hooks ou modifique `_buildHeaders` em `cypress/support/baseService.js`.
+Recomendações essenciais:
+- Use o workflow exemplo em `.github/workflows/pipeline.yaml` (template incluso).
+- Exponha serviços (Postgres/MySQL) no job e aguarde a saúde do serviço antes de executar os testes.
+- Configure Secrets no repositório: `DB_URL`, `DB_CLIENT`, `CYPRESS_baseUrl`, `CYPRESS_TOKEN`.
 
----
+Exemplo (GH CLI):
 
-## Exemplo rápido: seed automático em hooks
-
-Adicione um arquivo `cypress/e2e/tests/setup.spec.js` com:
-
-```js
-before(() => {
-  cy.task('seedDatabase', { sqlPath: 'database/seed.sql' });
-});
-
-after(() => {
-  // opcional teardown
-  // cy.task('queryDatabase', { query: 'TRUNCATE TABLE users RESTART IDENTITY CASCADE;' });
-});
+```bash
+gh secret set DB_URL --body "postgres://user:pass@host:5432/db"
+gh secret set CYPRESS_baseUrl --body "https://staging.api"
 ```
 
 ---
 
-## CI (GitHub Actions)
-
-- Workflow exemplo: `.github/workflows/pipeline.yaml` — executa testes com um serviço Postgres, faz cache de dependências e publica relatórios (`reports/`, `allure-results/`).
-- Defina secrets: `DB_URL`, `DB_CLIENT`, `CYPRESS_baseUrl`, `CYPRESS_TOKEN` no repositório.
-
----
-
-## SQL de exemplo (veja `database/seed.sql`)
+## SQL de exemplo (`database/seed.sql`)
 
 ```sql
 CREATE TABLE IF NOT EXISTS users (
-  id SERIAL PRIMARY KEY,
-  name VARCHAR(255) NOT NULL,
-  email VARCHAR(255) UNIQUE NOT NULL,
-  created_at TIMESTAMP DEFAULT now()
+	id SERIAL PRIMARY KEY,
+	name VARCHAR(255) NOT NULL,
+	email VARCHAR(255) UNIQUE NOT NULL,
+	created_at TIMESTAMP DEFAULT now()
 );
 
 INSERT INTO users (name, email) VALUES ('Alice Example','alice@example.test') ON CONFLICT DO NOTHING;
@@ -117,15 +216,23 @@ INSERT INTO users (name, email) VALUES ('Alice Example','alice@example.test') ON
 
 ---
 
-## Dicas rápidas
+## Checklist antes de abrir PR
 
-- Mantenha `Service Objects` sem asserts; deixe asserções nos specs.
-- Use `cy.task` para operações de DB (seed/clear) para testes idempotentes.
-- Para reprodutibilidade em CI, garanta que o `DB_URL` do serviço do runner seja acessível (ex.: `host.docker.internal` se usar containers).
+- [ ] Testes rodam localmente em `cypress:open` e `test:mochawesome`.
+- [ ] Seed/teardown garantem idempotência (via `cy.task`).
+- [ ] Service Objects ajustados ao ambiente alvo; sem asserts embutidos.
+- [ ] Variáveis sensíveis não estão committed (`.env` no `.gitignore`).
 
 ---
 
-Se quiser, eu adiciono automaticamente o `setup.spec.js` que chama `seedDatabase` antes dos testes (opção recomendada).
+## Próximos passos opcionais
+
+Se quiser, eu aplico automaticamente uma das opções:
+
+- **A** — adicionar `cypress/e2e/tests/setup.spec.js` que chama `cy.task('seedDatabase', ...)` antes da suíte;
+- **B** — integrar validação de contrato com `chai-json-schema` e exemplo de schema;
+- **C** — gerar `docker-compose.yml` com API stub + Postgres para testes locais.
+
 # Modelo Cypress — Arquitetura de Testes API
 
 Arquitetura pronta para testes de API com Cypress (v10+) e Node.js. Inclui:
